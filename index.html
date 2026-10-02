@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1714">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>ShelfScan</title>
+<style>
+/* Layout: full-bleed camera, controls float top and bottom; results slide over as a sheet. Single dark look on purpose (camera UI). */
+:root{--bg:#0d1714;--panel:#15231e;--line:#27392f;--fg:#e8f1ec;--mute:#93a89d;--accent:#3ee08f;--warn:#ffb547;--bad:#ff6b6b;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button{font:inherit;color:inherit;border:0;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#cam{position:fixed;inset:0;overflow:hidden;background:#000}
+video,#ov{position:absolute;inset:0;width:100%;height:100%}
+video{object-fit:cover}
+.top{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top,0px) + 10px) 16px 10px;display:grid;gap:8px;background:linear-gradient(#000a,#0000)}
+.r1{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.pill{justify-self:start;background:#000a;border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill span{color:var(--accent)}
+.seg{display:flex;background:#0009;border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg button{background:none;padding:7px 14px;border-radius:999px;color:var(--mute);font-weight:600}
+.seg button[aria-pressed=true]{background:var(--accent);color:#06210f}
+#status{font-size:12px;color:var(--mute);background:#0009;border-radius:999px;padding:6px 10px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bottom{position:absolute;left:0;right:0;bottom:0;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 16px);display:grid;gap:10px;background:linear-gradient(#0000,#000c)}
+#hint{text-align:center;color:var(--fg);font-size:13px;text-shadow:0 1px 2px #000}
+#hint.warn{color:var(--warn)}
+.row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
+.chip{background:#000a;border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-variant-numeric:tabular-nums;font-size:12px;color:var(--mute);min-width:0}
+.chip b{display:block;color:var(--fg);font-size:18px}
+#shoot{width:72px;height:72px;border-radius:50%;background:var(--fg);box-shadow:0 0 0 4px #000,0 0 0 7px var(--fg)}
+#shoot.rec{background:var(--bad);border-radius:18px;transform:scale(.7)}
+#shoot:disabled{opacity:.35}
+.side{display:flex;justify-content:flex-end;gap:8px}
+.btn{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-weight:600}
+.btn.primary{background:var(--accent);color:#06210f;border-color:var(--accent)}
+.btn:disabled{opacity:.4}
+#res{position:fixed;inset:0;background:var(--bg);overflow:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 24px)}
+#res h2{margin:0;font-size:20px}
+#res h3{margin:22px 0 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.pano{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:#000;margin-top:12px}
+.pano canvas{display:block;height:min(52vh,420px);width:auto;max-width:none}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:right}
+td:first-child,th:first-child{text-align:left;color:var(--mute);font-weight:400}
+th{font-size:12px;color:var(--mute)}
+.win{color:var(--accent);font-weight:700}
+.truth{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.truth input{width:90px;background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px;font:inherit}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px}
+#toast{position:fixed;left:16px;right:16px;top:calc(env(safe-area-inset-top,0px) + 64px);background:var(--warn);color:#2a1a00;padding:10px 12px;border-radius:10px;font-weight:600;text-align:center}
+#err{position:fixed;inset:0;display:grid;place-items:center;padding:24px;text-align:center;background:var(--bg)}
+.sheet{position:fixed;inset:0;background:var(--bg);overflow:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);display:grid;gap:12px;align-content:start}
+.sheet h2{margin:0;font-size:20px}
+.obj{display:grid;grid-template-columns:48px 1fr auto;gap:12px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.obj[aria-current=true]{border-color:var(--accent)}
+.obj img,.obj .ph{width:48px;height:48px;border-radius:8px;object-fit:cover;background:var(--line);display:grid;place-items:center;color:var(--mute)}
+.obj small{display:block;color:var(--mute)}
+.obj .acts{display:flex;gap:6px}
+.field{display:grid;gap:6px}
+.field input[type=text]{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:10px;font:inherit}
+input[type=range]{width:100%;accent-color:var(--accent)}
+#teachBar{position:absolute;left:0;right:0;bottom:0;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 16px);display:grid;gap:10px;background:linear-gradient(#0000,#000d 25%)}
+#teachBar .acts{display:flex;gap:8px;flex-wrap:wrap}
+#teachBar .acts .btn{flex:1 1 30%}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="cam">
+  <video id="v" playsinline muted autoplay></video>
+  <canvas id="ov"></canvas>
+  <div class="top"><div class="r1">
+    <div class="seg" role="group" aria-label="Capture mode">
+      <button data-m="live" aria-pressed="true">Live</button>
+      <button data-m="photo" aria-pressed="false">Photo</button>
+      <button data-m="video" aria-pressed="false">Video</button>
+    </div>
+    <span id="status">Loading model…</span></div>
+    <button class="pill" id="tgtB">Looking for: <span>Any object</span></button>
+  </div>
+  <div class="bottom">
+    <div id="hint">Point at any objects. Each one gets a box and a label.</div>
+    <div class="row">
+      <div class="chip" id="c1"><b>0</b>on screen</div>
+      <button id="shoot" aria-label="Capture" disabled></button>
+      <div class="side"><button class="btn" id="resetB" hidden>Reset</button><button class="btn primary" id="doneB" hidden disabled>Stitch</button></div>
+    </div>
+  </div>
+  <div id="teachBar" hidden>
+    <div class="field"><label for="tName">Object name</label><input type="text" id="tName" placeholder="e.g. Sticky note" autocomplete="off"></div>
+    <div class="seg" role="group" aria-label="Box shape" style="justify-self:start">
+      <button data-a="0.5" aria-pressed="false">Tall</button><button data-a="1" aria-pressed="true">Square</button><button data-a="1.6" aria-pressed="false">Wide</button>
+    </div>
+    <div id="tHint" style="font-size:13px">Fit the object inside the green box. Turn it, change the distance and the background to cover all angles.</div>
+    <div class="acts">
+      <button class="btn" id="tSnap">Add photo</button><button class="btn" id="tRec">Record 4s</button><button class="btn" id="tUp">Upload</button>
+      <input type="file" id="tFile" accept="image/*,video/*" multiple hidden>
+    </div>
+    <div class="row" style="grid-template-columns:1fr auto auto">
+      <div class="chip"><b id="tCount">0</b>samples (need 3+)</div>
+      <button class="btn" id="tCancel">Cancel</button><button class="btn primary" id="tSave" disabled>Save</button>
+    </div>
+  </div>
+</div>
+
+<section id="pick" class="sheet" hidden>
+  <div class="head"><h2>What should it look for?</h2><button class="btn" id="pClose">Close</button></div>
+  <div id="pList" style="display:grid;gap:8px"></div>
+  <button class="btn primary" id="pTeach">Teach a new object</button>
+  <div class="field"><label for="strict">Match strictness: <b id="strictV"></b></label><input type="range" id="strict" min="0" max="0.6" step="0.01" value="0.25">
+    <small style="color:var(--mute)">Raise it if it boxes the wrong things. Lower it if it misses your object. Only applies to taught objects.</small></div>
+  <div class="field"><span>Object size on screen</span><div class="seg" role="group" aria-label="Object size" id="sizeSeg" style="justify-self:start">
+    <button data-s="small" aria-pressed="false">Small</button><button data-s="medium" aria-pressed="true">Medium</button><button data-s="large" aria-pressed="false">Large</button></div>
+    <small style="color:var(--mute)">Small for products on a far shelf, large for one object close up. Only applies to taught objects.</small></div>
+</section>
+
+<section id="res" hidden>
+  <div class="head"><h2 id="rTitle">Result</h2><div style="display:flex;gap:8px"><button class="btn" id="dlB">Save image</button><button class="btn primary" id="backB">Back to camera</button></div></div>
+  <div class="pano"><canvas id="pano"></canvas></div>
+  <h3>Objects found</h3>
+  <div class="tags" id="tags"></div>
+  <h3>Photo vs video</h3>
+  <div class="truth"><label for="truth">Real count (count by hand)</label><input id="truth" type="number" min="1" inputmode="numeric" placeholder="e.g. 20"></div>
+  <div style="overflow-x:auto"><table id="cmp"></table></div>
+  <p style="color:var(--mute);font-size:12px">Run Photo mode and Video mode on the same shelf to fill both columns. Green marks the better value.</p>
+</section>
+<div id="toast" hidden></div>
+<div id="err" hidden></div>
+
+<script src="lib/tf.min.js"></script>
+<script src="lib/coco-ssd.min.js"></script>
+<script>
+const VERSION='v4';
+const $=s=>document.querySelector(s);
+const v=$('#v'), ov=$('#ov'), octx=ov.getContext('2d');
+const MATCH_MAX=24;      // mean grey difference above this = frames don't line up. Raise if it rejects good shots in dim stores.
+const KEEP_AT=0.35;      // video: keep a new frame once the view moved 35% of a frame width
+const MIN_SCORE=0.45;
+let model, mode='live', imgCap=null, busy=false, scanning=false, lastGrab=0, fpsT=performance.now(), fpsN=0;
+let frames=[], tracks=[], nextId=1, confirmed=new Set(), tick=0, lastDets=[];
+const results={photo:null,video:null};
+
+// ---------- helpers ----------
+const colorFor=c=>{let h=0;for(const ch of c)h=(h*31+ch.charCodeAt(0))%360;return `hsl(${h} 85% 60%)`};
+const iou=(a,b)=>{const x=Math.max(a.x,b.x),y=Math.max(a.y,b.y),r=Math.min(a.x+a.w,b.x+b.w),btm=Math.min(a.y+a.h,b.y+b.h);const i=Math.max(0,r-x)*Math.max(0,btm-y);return {iou:i/(a.w*a.h+b.w*b.h-i),cover:i/Math.min(a.w*a.h,b.w*b.h)}};
+const toBox=d=>({cls:d.class,score:d.score,x:d.bbox[0],y:d.bbox[1],w:d.bbox[2],h:d.bbox[3]});
+function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>t.hidden=true,3200)}
+function hint(msg,warn){const h=$('#hint');h.textContent=msg;h.classList.toggle('warn',!!warn)}
+function snapCanvas(src,w,h){const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(src,0,0,w,h);return c}
+
+// ---------- alignment: find where frame B sits relative to frame A (translation only) ----------
+// ponytail: translation-only stitch. Fine when the phone stays parallel to the shelf; tilt/rotation/parallax will ghost. Upgrade path: ORB features + homography (OpenCV).
+function gray(src,W){const sw=src.videoWidth||src.width, sh=src.videoHeight||src.height, H=Math.round(W*sh/sw);
+  const d=snapCanvas(src,W,H).getContext('2d').getImageData(0,0,W,H).data, g=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++)g[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2];return {g,w:W,h:H}}
+const pyr=src=>({s:gray(src,96),m:gray(src,192)});
+function diff(a,b,dx,dy,step){const w=a.w,h=a.h;const x0=Math.max(0,-dx),x1=Math.min(w,w-dx),y0=Math.max(0,-dy),y1=Math.min(h,h-dy);let s=0,n=0;
+  for(let y=y0;y<y1;y+=step){const ra=(y+dy)*w+dx,rb=y*w;for(let x=x0;x<x1;x+=step){s+=Math.abs(b.g[rb+x]-a.g[ra+x]);n++}}return n?s/n:1e9}
+function align(A,B){const a=A.s,b=B.s,mx=Math.floor(a.w*.75),my=Math.floor(a.h*.2);let best={c:1e9};
+  for(let dy=-my;dy<=my;dy++)for(let dx=-mx;dx<=mx;dx++){const c=diff(a,b,dx,dy,2);if(c<best.c)best={c,dx,dy}}
+  let r={c:1e9};for(let dy=best.dy*2-2;dy<=best.dy*2+2;dy++)for(let dx=best.dx*2-2;dx<=best.dx*2+2;dx++){const c=diff(A.m,B.m,dx,dy,1);if(c<r.c)r={c,dx,dy}}
+  return {dx:r.dx/A.m.w,dy:r.dy/A.m.w,c:r.c,edge:Math.abs(best.dx)>=mx-1}}
+
+function addFrame(canvas){const p=pyr(canvas),f={canvas,p,x:0,y:0,t:performance.now()};
+  if(frames.length){const L=frames[frames.length-1],e=align(L.p,p);
+    if(e.c>MATCH_MAX||e.edge)return {ok:false,e};
+    f.x=L.x+e.dx*canvas.width;f.y=L.y+e.dy*canvas.width;}
+  frames.push(f);updateCounts();return {ok:true}}
+
+// ---------- tracking (video mode): same object across frames keeps one ID ----------
+function updateTracks(dets){tick++;tracks.forEach(t=>t.m=false);
+  for(const d of [...dets].sort((a,b)=>b.score-a.score)){
+    let best=null,bi=.2;
+    for(const t of tracks){if(t.m||t.cls!==d.cls)continue;const p={x:t.x+t.vx,y:t.y+t.vy,w:t.w,h:t.h};const o=iou(p,d).iou;if(o>bi){bi=o;best=t}}
+    if(best){best.vx=(d.x-best.x)*.6+best.vx*.4;best.vy=(d.y-best.y)*.6+best.vy*.4;Object.assign(best,{x:d.x,y:d.y,w:d.w,h:d.h,last:tick,m:true});if(++best.hits>=3)confirmed.add(best.id);d.id=best.id}
+    else{const t={...d,id:nextId++,vx:0,vy:0,hits:1,last:tick,m:true};tracks.push(t);d.id=t.id}}
+  tracks=tracks.filter(t=>tick-t.last<12)}
+
+// ---------- drawing ----------
+function draw(dets){const dpr=devicePixelRatio||1,cw=ov.clientWidth,ch=ov.clientHeight;
+  if(ov.width!==cw*dpr){ov.width=cw*dpr;ov.height=ch*dpr}
+  octx.setTransform(dpr,0,0,dpr,0,0);octx.clearRect(0,0,cw,ch);
+  const vw=v.videoWidth,vh=v.videoHeight,s=Math.max(cw/vw,ch/vh),ox=(cw-vw*s)/2,oy=(ch-vh*s)/2;
+  octx.lineWidth=2;octx.font='600 12px system-ui,sans-serif';
+  for(const d of dets){const col=colorFor(d.cls),x=ox+d.x*s,y=oy+d.y*s,w=d.w*s,h=d.h*s;
+    octx.strokeStyle=col;octx.strokeRect(x,y,w,h);
+    const label=`${d.id?'#'+d.id+' ':''}${d.cls} ${Math.round(d.score*100)}%`,tw=octx.measureText(label).width+10;
+    octx.fillStyle=col;octx.fillRect(x-1,Math.max(0,y-20),tw,20);octx.fillStyle='#000';octx.fillText(label,x+4,Math.max(0,y-20)+14)}}
+
+function updateCounts(){const c=$('#c1');
+  if(mode==='live')c.innerHTML=`<b>${lastDets.length}</b>${target?esc(target.name)+' found':'on screen'}`;
+  else if(mode==='photo')c.innerHTML=`<b>${frames.length}</b>photos`;
+  else c.innerHTML=`<b>${confirmed.size}</b>tracked · ${frames.length} frames`;
+  $('#doneB').disabled=!frames.length||scanning;$('#resetB').hidden=!frames.length}
+
+// ---------- taught objects: learn from sample photos/video, then look only for that object ----------
+// ponytail: few-shot matching (detector backbone features + nearest neighbour vs background crops), no training run.
+// Boxes come from a sliding window, so they're looser than a trained detector's, and it runs ~1-3 fps. Upgrade path: label ~100 photos, fine-tune YOLO.
+const FEAT='FeatureExtractor/MobilenetV2/expanded_conv_16/project/BatchNorm/batchnorm/add_1',CROP=128,DIM=320;
+const SIZES={small:[.13,.2,.28],medium:[.25,.38,.52],large:[.45,.65,.9]}; // object height as share of frame height
+let target=null,objects=[],teaching=null,strict=0.25,size='medium';
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+const dims=s=>[s.videoWidth||s.width,s.videoHeight||s.height];
+const nb=(b,W,H)=>[b.y/H,b.x/W,(b.y+b.h)/H,(b.x+b.w)/W];
+const clip=(b,W,H)=>{const w=Math.min(b.w,W),h=Math.min(b.h,H);return {x:Math.min(Math.max(0,b.x),W-w),y:Math.min(Math.max(0,b.y),H-h),w,h}};
+const frameT=src=>tf.tidy(()=>tf.browser.fromPixels(src).toFloat().expandDims(0));
+function rawEmbed(img,boxes,flip){return tf.tidy(()=>{let c=tf.image.cropAndResize(img,boxes,boxes.map(()=>0),[CROP,CROP]);if(flip)c=tf.reverse(c,2);
+  return model.model.execute({'Preprocessor/sub':c.div(127.5).sub(1)},FEAT).mean([1,2])})}
+
+async function detect(src,n=40,thr=MIN_SCORE){return target?findTarget(src):(await model.detect(src,n,thr)).map(toBox)}
+
+async function scoreBoxes(img,boxes,T){const out=[];
+  for(let i=0;i<boxes.length;i+=64){const r=tf.tidy(()=>{const e=rawEmbed(img,boxes.slice(i,i+64)).sub(T.mu),u=e.div(e.norm('euclidean',1,true));
+    const p=tf.matMul(u,T.P,false,true).max(1),n=tf.matMul(u,T.N,false,true).max(1);return tf.stack([p,p.sub(n)],1)});
+    out.push(...await r.array());r.dispose()}return out}
+
+async function findTarget(src){const T=target,[W,H]=dims(src),A=T.aspect,img=frameT(src),wins=[];
+  try{for(const s of SIZES[size]){let h=s*H,w=A*h;if(w>W*.95){w=W*.95;h=w/A}
+      const sx=Math.max(w*.6,W/16),sy=h*.6;
+      for(let y=0;y+h<=H+1;y+=sy)for(let x=0;x+w<=W+1;x+=sx)wins.push({x,y,w,h})}
+    let sc=await scoreBoxes(img,wins.map(b=>nb(b,W,H)),T);
+    const hits=wins.map((b,i)=>({...b,p:sc[i][0],m:sc[i][1]})).filter(b=>b.m>strict-.03).sort((a,b)=>b.m-a.m).slice(0,6);
+    const vars=[];for(const b of hits)for(const [dx,dy,k] of [[0,0,.8],[0,0,1.2],[-.2,0,1],[.2,0,1],[0,-.2,1],[0,.2,1]]){const w=b.w*k,h=b.h*k;
+      vars.push(clip({x:b.x+b.w/2-w/2+dx*b.w,y:b.y+b.h/2-h/2+dy*b.h,w,h},W,H))}
+    if(vars.length){sc=await scoreBoxes(img,vars.map(b=>nb(b,W,H)),T);vars.forEach((b,i)=>hits.push({...b,p:sc[i][0],m:sc[i][1]}))}
+    const keep=[];for(const b of hits.filter(b=>b.m>strict).sort((a,b)=>b.m-a.m))if(!keep.some(k=>{const o=iou(k,b);return o.iou>.3||o.cover>.7}))keep.push(b);
+    return keep.map(b=>({cls:T.name,score:b.p,x:b.x,y:b.y,w:b.w,h:b.h}))}
+  finally{img.dispose()}}
+
+// --- teaching ---
+function guideFor(W,H,a){let h=.6*Math.min(W,H),w=h*a;if(w>.9*W){w=.9*W;h=w/a}return {x:(W-w)/2,y:(H-h)/2,w,h}}
+async function addSample(src,gb){const [W,H]=dims(src),g=gb||guideFor(W,H,teaching.aspect),sc=k=>clip({x:g.x+g.w*(1-k)/2,y:g.y+g.h*(1-k)/2,w:g.w*k,h:g.h*k},W,H);
+  const pos=[g,sc(.85),sc(1.15)].map(b=>nb(b,W,H)),neg=[];
+  for(let t=0;t<40&&neg.length<6;t++){const b={x:Math.random()*(W-g.w),y:Math.random()*(H-g.h),w:g.w,h:g.h};if(iou(b,g).iou<.05)neg.push(nb(b,W,H))}
+  for(let t=0;t<40&&neg.length<6;t++){const b={x:Math.random()*W*.75,y:Math.random()*H*.75,w:W/4,h:H/4};if(iou(b,g).cover<.2)neg.push(nb(b,W,H))}
+  const img=frameT(src);
+  for(const [rows,bx,f] of [[teaching.pos,pos,false],[teaching.pos,pos,true],[teaching.neg,neg,false]])if(bx.length){const t=rawEmbed(img,bx,f);rows.push(await t.data());t.dispose()}
+  img.dispose();
+  if(!teaching.thumb){const c=snapCanvas(src,W,H),t=document.createElement('canvas');t.width=t.height=96;t.getContext('2d').drawImage(c,g.x,g.y,g.w,g.h,0,0,96,96);teaching.thumb=t.toDataURL('image/jpeg',.8)}
+  $('#tCount').textContent=++teaching.n;$('#tSave').disabled=teaching.n<3}
+
+function cat(list){const n=list.reduce((a,x)=>a+x.length,0),o=new Float32Array(n);let i=0;for(const x of list){o.set(x,i);i+=x.length}return o}
+function prep(o){const mu=new Float32Array(DIM),all=[o.pos,o.neg];let c=0;
+  for(const a of all)for(let i=0;i<a.length;i+=DIM){for(let j=0;j<DIM;j++)mu[j]+=a[i+j];c++}mu.forEach((x,j)=>mu[j]=x/c);
+  const norm=a=>tf.tidy(()=>{const e=tf.tensor2d(a,[a.length/DIM,DIM]).sub(mu);return e.div(e.norm('euclidean',1,true))});
+  return {...o,mu:tf.tensor1d(mu),P:norm(o.pos),N:norm(o.neg)}}
+
+// --- storage (IndexedDB; survives app restarts on this phone) ---
+function store(op,val){return new Promise((ok,no)=>{const r=indexedDB.open('shelfscan',1);r.onupgradeneeded=()=>r.result.createObjectStore('objects',{keyPath:'id'});r.onerror=()=>no(r.error);
+  r.onsuccess=()=>{const s=r.result.transaction('objects','readwrite').objectStore('objects'),q=op==='all'?s.getAll():op==='put'?s.put(val):s.delete(val);q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)}})}
+async function loadObjects(){try{objects=(await store('all')).filter(o=>o.dim===DIM).map(prep)}catch(e){console.warn('storage unavailable',e)}renderPick()}
+
+// --- UI ---
+function setTarget(o){target=o;$('#tgtB span').textContent=o?o.name:'Any object';reset();updateCounts();renderPick()}
+function renderPick(){$('#pList').innerHTML=`<div class="obj" aria-current="${!target}"><div class="ph">80</div><div>Any object<small>80 everyday types: bottle, cup, phone…</small></div><div class="acts"><button class="btn" data-use="">Use</button></div></div>`+
+  objects.map(o=>`<div class="obj" aria-current="${target?.id===o.id}"><img src="${o.thumb}" alt=""><div>${esc(o.name)}<small>${o.n} samples</small></div><div class="acts"><button class="btn" data-use="${o.id}">Use</button><button class="btn" data-del="${o.id}" aria-label="Delete ${esc(o.name)}">✕</button></div></div>`).join('')}
+$('#pList').onclick=async e=>{const u=e.target.dataset.use,d=e.target.dataset.del;
+  if(u!==undefined){setTarget(objects.find(o=>o.id===u)||null);$('#pick').hidden=true}
+  if(d){const o=objects.find(o=>o.id===d);[o.mu,o.P,o.N].forEach(t=>t.dispose());objects=objects.filter(x=>x!==o);if(target===o)setTarget(null);store('del',d).catch(()=>{});renderPick()}};
+$('#tgtB').onclick=()=>{if(!scanning&&model){renderPick();$('#pick').hidden=false}};
+$('#pClose').onclick=()=>$('#pick').hidden=true;
+document.querySelectorAll('#sizeSeg button').forEach(b=>b.onclick=()=>{size=b.dataset.s;document.querySelectorAll('#sizeSeg button').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+$('#strict').oninput=e=>{strict=+e.target.value;$('#strictV').textContent=strict.toFixed(2)};$('#strictV').textContent=strict.toFixed(2);
+$('#pTeach').onclick=()=>{$('#pick').hidden=true;teaching={pos:[],neg:[],n:0,aspect:1,thumb:null};$('#tCount').textContent=0;$('#tSave').disabled=true;$('#tName').value='';$('#tHint').textContent='Fit the object inside the green box. Turn it, change the distance and the background to cover all angles.';
+  $('.bottom').hidden=true;$('.top').hidden=true;$('#teachBar').hidden=false};
+document.querySelectorAll('#teachBar [data-a]').forEach(b=>b.onclick=()=>{teaching.aspect=+b.dataset.a;document.querySelectorAll('#teachBar [data-a]').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+function endTeach(){teaching=null;$('#teachBar').hidden=true;$('.bottom').hidden=false;$('.top').hidden=false}
+$('#tCancel').onclick=endTeach;
+$('#tSnap').onclick=()=>addSample(v,camGuide().vid);
+$('#tRec').onclick=async()=>{const b=$('#tRec');b.disabled=true;for(let i=16;i>0;i--){b.textContent=`Recording… ${Math.ceil(i/4)}s`;await addSample(v,camGuide().vid);await new Promise(r=>setTimeout(r,250))}b.textContent='Record 4s';b.disabled=false};
+$('#tUp').onclick=()=>$('#tFile').click();
+$('#tFile').onchange=async e=>{$('#tHint').textContent='Reading files…';
+  for(const f of e.target.files){try{
+    if(f.type.startsWith('video')){const vid=document.createElement('video');vid.muted=true;vid.playsInline=true;vid.src=URL.createObjectURL(f);
+      await new Promise((ok,no)=>{vid.onloadeddata=ok;vid.onerror=no});
+      for(let k=0;k<12;k++){vid.currentTime=vid.duration*(k+.5)/12;await new Promise(r=>vid.onseeked=r);await addSample(vid)}URL.revokeObjectURL(vid.src)}
+    else await addSample(await createImageBitmap(f))}catch(err){toast(`Couldn't read ${f.name}`)}}
+  e.target.value='';$('#tHint').textContent='Keep the object in the middle of uploads, filling about half the picture.'};
+$('#tSave').onclick=async()=>{const name=$('#tName').value.trim();if(!name){toast('Give the object a name first.');$('#tName').focus();return}
+  if(teaching.n<3)return;
+  const o={id:String(Date.now()),dim:DIM,name,aspect:teaching.aspect,n:teaching.n,thumb:teaching.thumb,pos:cat(teaching.pos),neg:cat(teaching.neg)};
+  store('put',o).catch(()=>toast('Saved for this session only (storage blocked).'));
+  objects.push(prep(o));endTeach();setTarget(objects.at(-1));hint(`Looking for ${name}. Adjust strictness in the picker if needed.`)};
+// Guide box sits in the visible camera area above the teach panel; returns it in screen and video pixels.
+function camGuide(){const cw=ov.clientWidth,ch=ov.clientHeight-$('#teachBar').offsetHeight,vw=v.videoWidth,vh=v.videoHeight,s=Math.max(ov.clientWidth/vw,ov.clientHeight/vh),
+  ox=(ov.clientWidth-vw*s)/2,oy=(ov.clientHeight-vh*s)/2,a=teaching.aspect;let h=.7*Math.min(cw,ch),w=h*a;if(w>.9*cw){w=.9*cw;h=w/a}
+  const x=(cw-w)/2,y=(ch-h)/2;return {x,y,w,h,vid:{x:(x-ox)/s,y:(y-oy)/s,w:w/s,h:h/s}}}
+function drawGuide(){const dpr=devicePixelRatio||1,cw=ov.clientWidth,ch=ov.clientHeight;if(ov.width!==cw*dpr){ov.width=cw*dpr;ov.height=ch*dpr}
+  octx.setTransform(dpr,0,0,dpr,0,0);octx.clearRect(0,0,cw,ch);
+  const {x,y,w,h}=camGuide();
+  octx.fillStyle='#0008';octx.beginPath();octx.rect(0,0,cw,ch);octx.rect(x,y+h,w,-h);octx.fill('evenodd');
+  octx.strokeStyle='#3ee08f';octx.lineWidth=3;octx.strokeRect(x,y,w,h)}
+
+// ---------- main loop ----------
+function loop(){requestAnimationFrame(loop);if(v.readyState<2)return;
+  if(teaching){drawGuide();return}
+  if(model&&!busy&&$('#res').hidden&&$('#pick').hidden){busy=true;tickDetect().finally(()=>busy=false)}}
+async function tickDetect(){ // detection runs at its own pace; the frame loop never waits on it
+  try{const dets=await detect(v);if(teaching)return;
+    if(mode==='video'&&scanning){updateTracks(dets);videoKeep()}
+    lastDets=dets;draw(dets);if(mode==='live'||scanning)updateCounts();
+    fpsN++;const now=performance.now();if(now-fpsT>1000){$('#status').textContent=`${(fpsN*1000/(now-fpsT)).toFixed(1)} fps · ${VERSION}`;fpsN=0;fpsT=now}
+  }catch(e){console.error(e)}}
+
+function videoKeep(){const now=performance.now();if(now-lastGrab<150)return;lastGrab=now;
+  if(!frames.length){addFrame(snapCanvas(v,v.videoWidth,v.videoHeight));return}
+  const L=frames[frames.length-1],e=align(L.p,pyr(v));
+  if(e.c>MATCH_MAX||e.edge){hint('Lost the shelf. Move back a little and go slower.',true);return}
+  const moved=Math.hypot(e.dx,e.dy);
+  if(moved>=KEEP_AT){addFrame(snapCanvas(v,v.videoWidth,v.videoHeight));hint('Good. Keep moving slowly.')}
+  else hint(`Keep moving · ${Math.round(moved/KEEP_AT*100)}% to next frame`)}
+
+// ---------- capture ----------
+async function grabPhoto(){ // full-res still if the phone supports it, else the video frame
+  if(imgCap){try{const bm=await createImageBitmap(await imgCap.takePhoto());return snapCanvas(bm,bm.width,bm.height)}catch(e){console.warn('takePhoto failed',e)}}
+  return snapCanvas(v,v.videoWidth,v.videoHeight)}
+
+$('#shoot').onclick=async()=>{const b=$('#shoot');
+  if(mode==='photo'){b.disabled=true;const r=addFrame(await grabPhoto());b.disabled=false;
+    if(!r.ok)toast("Couldn't line this photo up with the last one. Overlap about half of the previous shot and retake.");
+    else hint(`Photo ${frames.length} saved. Move right so about half the last shot is still in view.`)}
+  else if(mode==='video'){scanning=!scanning;b.classList.toggle('rec',scanning);
+    if(scanning){reset();scanning=true;hint('Hold the phone parallel to the shelf and walk slowly.')}
+    else{updateCounts();if(frames.length)process()}}};
+$('#doneB').onclick=()=>process();
+$('#resetB').onclick=()=>{reset();updateCounts();hint(modeHint())};
+$('#backB').onclick=()=>{$('#res').hidden=true;reset();updateCounts();hint(modeHint())};
+
+function reset(){frames=[];tracks=[];confirmed=new Set();nextId=1;tick=0;scanning=false;$('#shoot').classList.remove('rec')}
+const modeHint=()=>({live:'Point at any objects. Each one gets a box and a label.',photo:'Shoot the shelf left to right. Keep about half of the last photo in each new one.',video:'Tap record, then walk slowly along the shelf.'})[mode];
+document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{if(scanning)return;mode=b.dataset.m;
+  document.querySelectorAll('.seg button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  reset();$('#shoot').hidden=mode==='live';$('#doneB').hidden=mode!=='photo';hint(modeHint());updateCounts()});
+$('#shoot').hidden=true;
+
+// ---------- stitch + detect + dedupe ----------
+async function process(){const t0=performance.now();hint('Stitching and detecting…');
+  const boxes=[];let raw=0;
+  for(const f of frames){const W=f.canvas.width,k=Math.min(1,1280/W),dc=k<1?snapCanvas(f.canvas,W*k,f.canvas.height*k):f.canvas;
+    for(const b of await detect(dc,60,MIN_SCORE*.9)){raw++;boxes.push({...b,x:f.x+b.x/k,y:f.y+b.y/k,w:b.w/k,h:b.h/k})}}
+  // merge the same object seen in overlapping frames
+  const kept=[];for(const b of boxes.sort((a,c)=>c.score-a.score)){if(!kept.some(k=>k.cls===b.cls&&(()=>{const o=iou(k,b);return o.iou>.3||o.cover>.6})()))kept.push(b)}
+  const W=frames[0].canvas.width,H=frames[0].canvas.height;
+  const minX=Math.min(...frames.map(f=>f.x)),minY=Math.min(...frames.map(f=>f.y)),pw=Math.max(...frames.map(f=>f.x))-minX+W,ph=Math.max(...frames.map(f=>f.y))-minY+H;
+  const s=Math.min(1,8000/pw,Math.sqrt(16e6/(pw*ph))),pc=$('#pano'),ctx=pc.getContext('2d');
+  pc.width=Math.round(pw*s);pc.height=Math.round(ph*s);ctx.fillStyle='#000';ctx.fillRect(0,0,pc.width,pc.height);
+  for(const f of frames)ctx.drawImage(f.canvas,(f.x-minX)*s,(f.y-minY)*s,W*s,H*s);
+  ctx.lineWidth=Math.max(2,pc.width/600);ctx.font=`700 ${Math.max(14,pc.height/30)}px system-ui,sans-serif`;
+  kept.forEach((b,i)=>{const col=colorFor(b.cls),x=(b.x-minX)*s,y=(b.y-minY)*s;ctx.strokeStyle=col;ctx.strokeRect(x,y,b.w*s,b.h*s);
+    const l=`${i+1} ${b.cls}`,tw=ctx.measureText(l).width+8,fh=parseInt(ctx.font.split(' ')[1])+6;ctx.fillStyle=col;ctx.fillRect(x,y,tw,fh);ctx.fillStyle='#000';ctx.fillText(l,x+4,y+fh-6)});
+  const byClass={};kept.forEach(b=>byClass[b.cls]=(byClass[b.cls]||0)+1);
+  results[mode]={frames:frames.length,capture:(frames.at(-1).t-frames[0].t)/1000,proc:(performance.now()-t0)/1000,res:`${W}×${H}`,raw,unique:kept.length,
+    tracked:mode==='video'?confirmed.size:null,conf:kept.length?kept.reduce((a,b)=>a+b.score,0)/kept.length:0,byClass};
+  $('#rTitle').textContent=`${mode==='photo'?'Photo':'Video'} result · ${kept.length} objects`;
+  $('#tags').innerHTML=Object.entries(byClass).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<span class="tag" style="border-color:${colorFor(c)}">${c} · ${n}</span>`).join('')||'<span class="tag">Nothing detected</span>';
+  renderCmp();$('#res').hidden=false;$('#res').scrollTop=0}
+
+function renderCmp(){const P=results.photo,V=results.video,T=+$('#truth').value||0;
+  const acc=r=>r&&T?Math.max(0,100-Math.abs(r.unique-T)/T*100):null;
+  const rows=[['Frames used','frames',null,0],['Capture time (s)','capture',1,-1],['Processing time (s)','proc',1,-1],['Frame resolution','res',null,0],
+    ['Detections before merge','raw',null,0],['Objects after merge','unique',null,0],['Duplicates removed',r=>r.raw-r.unique,null,0],
+    ['Unique objects tracked live',r=>r.tracked??'—',null,0],['Avg confidence (%)',r=>r.conf*100,0,1],['Count accuracy (%)',acc,0,1]];
+  const val=(r,k)=>!r?null:typeof k==='function'?k(r):r[k];
+  const fmt=(x,d)=>x==null?'—':typeof x==='number'&&d!=null?x.toFixed(d):x;
+  $('#cmp').innerHTML='<tr><th></th><th>Photo</th><th>Video</th></tr>'+rows.map(([l,k,d,better])=>{const a=val(P,k),b=val(V,k);
+    let wa='',wb='';if(better&&typeof a==='number'&&typeof b==='number'&&a!==b){(better>0?a>b:a<b)?wa='win':wb='win'}
+    return `<tr><td>${l}</td><td class="${wa}">${fmt(a,d)}</td><td class="${wb}">${fmt(b,d)}</td></tr>`}).join('')}
+$('#truth').oninput=renderCmp;
+$('#dlB').onclick=()=>$('#pano').toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`shelf-${mode}-${Date.now()}.jpg`;a.click()},'image/jpeg',.9);
+
+// ---------- boot ----------
+(async()=>{
+  if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+  try{const s=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+    v.srcObject=s;const tr=s.getVideoTracks()[0];if('ImageCapture'in window)imgCap=new ImageCapture(tr);
+    navigator.wakeLock?.request('screen').catch(()=>{});
+  }catch(e){const er=$('#err');er.hidden=false;er.innerHTML=`<div><h2>Camera not available</h2><p>Allow camera access, and open the app over <b>https</b> (or install it). ${e.name||''}</p></div>`;return}
+  // Weights ship as a <script> (not fetch) so the app also works when index.html is opened straight from disk.
+  try{await new Promise((ok,no)=>{const s=document.createElement('script');s.src='model/model.js';s.onload=ok;s.onerror=()=>no(new Error('model/model.js missing'));document.head.append(s)});
+    const M=window.COCO_MODEL,bin=atob(M.b64),buf=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);delete window.COCO_MODEL;
+    await tf.ready();model=await cocoSsd.load({modelUrl:tf.io.fromMemory({modelTopology:M.topology,weightSpecs:M.specs,weightData:buf.buffer})});$('#shoot').disabled=false;$('#status').textContent='Ready · '+VERSION;loadObjects()}
+  catch(e){$('#status').textContent='Model failed: '+e.message;console.error(e)}
+  loop()})();
+</script>
+</body>
+</html>
