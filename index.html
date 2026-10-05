@@ -138,14 +138,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 <script src="lib/coco-ssd.min.js"></script>
 <script src="tracker.js"></script>
 <script>
-const VERSION='v5';
+const VERSION='v6';
 const $=s=>document.querySelector(s);
 const v=$('#v'), ov=$('#ov'), octx=ov.getContext('2d');
 const MATCH_MAX=24;      // mean grey difference above this = frames don't line up. Raise if it rejects good shots in dim stores.
 const KEEP_AT=0.35;      // video: keep a new frame once the view moved 35% of a frame width
 const MIN_SCORE=0.45;
 let model, mode='live', imgCap=null, busy=false, scanning=false, lastGrab=0, fpsT=performance.now(), fpsN=0;
-let frames=[], trk=newTracker(), lastP=null, lastDets=[];
+let frames=[], trk=newTracker(), lastDets=[];
 const results={photo:null,video:null};
 
 // ---------- helpers ----------
@@ -158,13 +158,15 @@ function snapCanvas(src,w,h){const c=document.createElement('canvas');c.width=w;
 
 // ---------- alignment: find where frame B sits relative to frame A (translation only) ----------
 // ponytail: translation-only stitch. Fine when the phone stays parallel to the shelf; tilt/rotation/parallax will ghost. Upgrade path: ORB features + homography (OpenCV).
+const grayCv={};
 function gray(src,W){const sw=src.videoWidth||src.width, sh=src.videoHeight||src.height, H=Math.round(W*sh/sw);
-  const d=snapCanvas(src,W,H).getContext('2d').getImageData(0,0,W,H).data, g=new Float32Array(W*H);
+  const c=grayCv[W]??=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(src,0,0,W,H);
+  const d=x.getImageData(0,0,W,H).data, g=new Float32Array(W*H);
   for(let i=0;i<W*H;i++)g[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2];return {g,w:W,h:H}}
 const pyr=src=>({s:gray(src,96),m:gray(src,192)});
 function diff(a,b,dx,dy,step){const w=a.w,h=a.h;const x0=Math.max(0,-dx),x1=Math.min(w,w-dx),y0=Math.max(0,-dy),y1=Math.min(h,h-dy);let s=0,n=0;
   for(let y=y0;y<y1;y+=step){const ra=(y+dy)*w+dx,rb=y*w;for(let x=x0;x<x1;x+=step){s+=Math.abs(b.g[rb+x]-a.g[ra+x]);n++}}return n?s/n:1e9}
-function align(A,B){const a=A.s,b=B.s,mx=Math.floor(a.w*.75),my=Math.floor(a.h*.2);let best={c:1e9};
+function align(A,B,range=.75){const a=A.s,b=B.s,mx=Math.floor(a.w*range),my=Math.floor(a.h*Math.min(.2,range));let best={c:1e9};
   for(let dy=-my;dy<=my;dy++)for(let dx=-mx;dx<=mx;dx++){const c=diff(a,b,dx,dy,2);if(c<best.c)best={c,dx,dy}}
   let r={c:1e9};for(let dy=best.dy*2-2;dy<=best.dy*2+2;dy++)for(let dx=best.dx*2-2;dx<=best.dx*2+2;dx++){const c=diff(A.m,B.m,dx,dy,1);if(c<r.c)r={c,dx,dy}}
   return {dx:r.dx/A.m.w,dy:r.dy/A.m.w,c:r.c,edge:Math.abs(best.dx)>=mx-1}}
@@ -185,7 +187,7 @@ function draw(dets){const dpr=devicePixelRatio||1,cw=ov.clientWidth,ch=ov.client
   const vw=v.videoWidth,vh=v.videoHeight,s=Math.max(cw/vw,ch/vh),ox=(cw-vw*s)/2,oy=(ch-vh*s)/2;
   octx.lineWidth=2;octx.font='600 12px system-ui,sans-serif';
   for(const d of dets){const col=colorFor(d.cls),x=ox+d.x*s,y=oy+d.y*s,w=d.w*s,h=d.h*s;
-    octx.strokeStyle=col;octx.strokeRect(x,y,w,h);
+    octx.setLineDash(trk.confirmed.has(d.id)?[]:[6,4]);octx.strokeStyle=col;octx.strokeRect(x,y,w,h);octx.setLineDash([]);
     const label=`${d.id?'#'+d.id+' ':''}${d.cls} ${Math.round(d.score*100)}%`,tw=octx.measureText(label).width+10;
     octx.fillStyle=col;octx.fillRect(x-1,Math.max(0,y-20),tw,20);octx.fillStyle='#000';octx.fillText(label,x+4,Math.max(0,y-20)+14)}}
 
@@ -221,7 +223,7 @@ async function findTarget(src){const T=target,[W,H]=dims(src),A=T.aspect,img=fra
       const sx=Math.max(w*.6,W/16),sy=h*.6;
       for(let y=0;y+h<=H+1;y+=sy)for(let x=0;x+w<=W+1;x+=sx)wins.push({x,y,w,h})}
     let sc=await scoreBoxes(img,wins.map(b=>nb(b,W,H)),T);
-    const hits=wins.map((b,i)=>({...b,p:sc[i][0],m:sc[i][1]})).filter(b=>b.m>strict-.03).sort((a,b)=>b.m-a.m).slice(0,6);
+    const hits=wins.map((b,i)=>({...b,p:sc[i][0],m:sc[i][1]})).filter(b=>b.m>strict-.03).sort((a,b)=>b.m-a.m).filter((b,i,arr)=>!arr.slice(0,i).some(k=>iou(k,b).iou>.3)).slice(0,16);
     const vars=[];for(const b of hits)for(const [dx,dy,k] of [[0,0,.8],[0,0,1.2],[-.2,0,1],[.2,0,1],[0,-.2,1],[0,.2,1]]){const w=b.w*k,h=b.h*k;
       vars.push(clip({x:b.x+b.w/2-w/2+dx*b.w,y:b.y+b.h/2-h/2+dy*b.h,w,h},W,H))}
     if(vars.length){sc=await scoreBoxes(img,vars.map(b=>nb(b,W,H)),T);vars.forEach((b,i)=>hits.push({...b,p:sc[i][0],m:sc[i][1]}))}
@@ -294,15 +296,22 @@ function drawGuide(){const dpr=devicePixelRatio||1,cw=ov.clientWidth,ch=ov.clien
   octx.strokeStyle='#3ee08f';octx.lineWidth=3;octx.strokeRect(x,y,w,h)}
 
 // ---------- main loop ----------
+// Boxes stay locked on objects between (slow) detections: every frame we measure how the camera moved and slide the
+// tracked boxes by the same amount. Detections then only correct the boxes instead of redrawing them from scratch.
+let prevFP=null;const mot={x:0,y:0};
 function loop(){requestAnimationFrame(loop);if(v.readyState<2)return;
-  if(teaching){drawGuide();return}
-  if(model&&!busy&&$('#res').hidden&&$('#pick').hidden){busy=true;tickDetect().finally(()=>busy=false)}}
+  if(teaching){drawGuide();prevFP=null;return}
+  if(!$('#res').hidden||!$('#pick').hidden){prevFP=null;return}
+  const p=pyr(v);
+  if(prevFP){const e=align(prevFP,p,.2);if(e.c<=MATCH_MAX&&!e.edge){const sx=e.dx*v.videoWidth,sy=e.dy*v.videoWidth;mot.x+=sx;mot.y+=sy;for(const t of trk.tracks){t.x-=sx;t.y-=sy}}}
+  prevFP=p;draw(visibleTracks());
+  if(model&&!busy){busy=true;tickDetect().finally(()=>busy=false)}}
+const visibleTracks=()=>trk.tracks.filter(t=>trk.tick-t.last<=3); // keep showing a box ~3 detections after the object was last seen
 async function tickDetect(){ // detection runs at its own pace; the frame loop never waits on it
-  try{const track=mode==='video'&&scanning,p=track?pyr(v):null;
-    let dets=await detect(v,60,track?TRK.low:MIN_SCORE);if(teaching)return;
-    if(track){let sx=0,sy=0;if(lastP){const e=align(lastP,p);if(e.c<=MATCH_MAX&&!e.edge){sx=e.dx*v.videoWidth;sy=e.dy*v.videoWidth}}
-      lastP=p;trackStep(trk,dets,sx,sy);videoKeep();dets=dets.filter(d=>d.score>=MIN_SCORE||d.id)}
-    lastDets=dets;draw(dets);if(mode==='live'||scanning)updateCounts();
+  try{const m0={...mot},dets=await detect(v,60,TRK.low);if(teaching)return;
+    for(const d of dets){d.x-=mot.x-m0.x;d.y-=mot.y-m0.y} // detection ran on an older frame: move it to where the camera is now
+    trackStep(trk,dets);if(mode==='video'&&scanning)videoKeep();
+    lastDets=trk.tracks.filter(t=>t.last===trk.tick&&trk.confirmed.has(t.id));if(mode==='live'||scanning)updateCounts();
     fpsN++;const now=performance.now();if(now-fpsT>1000){$('#status').textContent=`${(fpsN*1000/(now-fpsT)).toFixed(1)} fps · ${VERSION}`;fpsN=0;fpsT=now}
   }catch(e){console.error(e)}}
 
@@ -330,7 +339,7 @@ $('#doneB').onclick=()=>process();
 $('#resetB').onclick=()=>{reset();updateCounts();hint(modeHint())};
 $('#backB').onclick=()=>{$('#res').hidden=true;reset();updateCounts();hint(modeHint())};
 
-function reset(){frames=[];trk=newTracker();lastP=null;scanning=false;$('#shoot').classList.remove('rec')}
+function reset(){frames=[];trk=newTracker();scanning=false;$('#shoot').classList.remove('rec')}
 const modeHint=()=>({live:'Point at any objects. Each one gets a box and a label.',photo:'Shoot the shelf left to right. Keep about half of the last photo in each new one.',video:'Tap record, then walk slowly along the shelf.'})[mode];
 document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{if(scanning)return;mode=b.dataset.m;
   document.querySelectorAll('.seg button').forEach(x=>x.setAttribute('aria-pressed',x===b));

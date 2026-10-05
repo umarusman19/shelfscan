@@ -13,14 +13,15 @@ function greedyMatch(tr,ds,thr){ // ponytail: greedy by IoU, not Hungarian. Same
   for(const [,i,j] of p)if(!ut.has(i)&&!ud.has(j)){ut.add(i);ud.add(j);m.push([i,j])}return m}
 // dets: [{cls,score,x,y,w,h}] in current-frame pixels. sx,sy: how far the camera moved since last tick, in pixels.
 // Sets d.id on matched detections. Returns the tracker state.
+// Matched boxes move 60% toward the new detection (smoothing, so boxes don't jitter).
 function trackStep(S,dets,sx=0,sy=0){S.tick++;
   for(const t of S.tracks){t.x-=sx;t.y-=sy}
   const hi=dets.filter(d=>d.score>=TRK.high),lo=dets.filter(d=>d.score<TRK.high&&d.score>=TRK.low);
-  const hit=(t,d)=>{Object.assign(t,{x:d.x,y:d.y,w:d.w,h:d.h,last:S.tick});d.id=t.id;if(++t.hits>=TRK.confirm)S.confirmed.add(t.id)};
+  const hit=(t,d)=>{const k=.6;Object.assign(t,{x:t.x+(d.x-t.x)*k,y:t.y+(d.y-t.y)*k,w:t.w+(d.w-t.w)*k,h:t.h+(d.h-t.h)*k,score:d.score,last:S.tick});d.id=t.id;if(++t.hits>=TRK.confirm)S.confirmed.add(t.id)};
   const m1=greedyMatch(S.tracks,hi,TRK.matchHigh);m1.forEach(([i,j])=>hit(S.tracks[i],hi[j]));
   const usedT=new Set(m1.map(p=>p[0])),usedD=new Set(m1.map(p=>p[1]));
   const rest=S.tracks.filter((_,i)=>!usedT.has(i));
   greedyMatch(rest,lo,TRK.matchLow).forEach(([i,j])=>hit(rest[i],lo[j]));
-  hi.forEach((d,j)=>{if(!usedD.has(j)){const t={cls:d.cls,x:d.x,y:d.y,w:d.w,h:d.h,id:S.nextId++,hits:1,last:S.tick};S.tracks.push(t);d.id=t.id}});
+  hi.forEach((d,j)=>{if(!usedD.has(j)){const t={cls:d.cls,score:d.score,x:d.x,y:d.y,w:d.w,h:d.h,id:S.nextId++,hits:1,last:S.tick};S.tracks.push(t);d.id=t.id}});
   S.tracks=S.tracks.filter(t=>S.tick-t.last<=TRK.keep);return S}
 if(typeof module!=='undefined')module.exports={newTracker,trackStep,TRK};
